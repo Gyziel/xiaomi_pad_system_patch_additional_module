@@ -1,0 +1,81 @@
+name: 小米 Pad 7 Pro 系统增强模块
+
+run-name: Pad 7 Pro | OS3.0.307.0.WOYCNXM
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-pad7pro.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pad7pro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ROM_VERSION: OS3.0.307.0.WOYCNXM
+      ROM_URL: https://bigota.d.miui.com/OS3.0.307.0.WOYCNXM/muyu-ota_full-OS3.0.307.0.WOYCNXM-user-16.0-2154ce3df2.zip
+    steps:
+      - name: Checkout fork source
+        uses: actions/checkout@v4
+
+      - name: Prepare disk space
+        run: |
+          df -h
+          sudo rm -rf /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          df -h
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y unzip zip dos2unix
+          chmod +x common/binary/*
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Strict device and firmware install validation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('module_src/customize.sh')
+          guard = """# Only install on the exact original ROM targeted by this build.
+          _gy_device="$(getprop ro.product.device)"
+          _gy_version="$(getprop ro.mi.os.version.incremental)"
+          [ "$_gy_device" = "muyu" ] || abort "Wrong device: $_gy_device (required: muyu)"
+          [ "$_gy_version" = "OS3.0.307.0.WOYCNXM" ] || abort "Wrong firmware: $_gy_version (required: OS3.0.307.0.WOYCNXM)"
+          """
+          p.write_text(guard + '\n' + p.read_text())
+          PY
+
+      - name: Patch actual ROM binaries
+        run: |
+          bash ./build.sh --rom "$ROM_VERSION" --url "$ROM_URL"
+
+      - name: Verify real installable ZIP
+        run: |
+          set -euo pipefail
+          test -s "dist/$ROM_VERSION.zip"
+          unzip -t "dist/$ROM_VERSION.zip" | tail -n 2
+          unzip -p "dist/$ROM_VERSION.zip" module.prop | grep -Fx "version=$ROM_VERSION"
+          unzip -Z1 "dist/$ROM_VERSION.zip" | grep -Fx 'system/system_ext/framework/miui-services.jar'
+          unzip -Z1 "dist/$ROM_VERSION.zip" | grep -Fx 'system/system_ext/priv-app/MiuiSystemUI/MiuiSystemUI.apk'
+          unzip -p "dist/$ROM_VERSION.zip" customize.sh | grep -F 'Wrong firmware'
+          (cd dist && sha256sum "$ROM_VERSION.zip" > SHA256SUMS)
+
+      - name: Upload Magisk / KernelSU module
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pad7Pro-muyu-OS3.0.307.0.WOYCNXM
+          path: |
+            dist/OS3.0.307.0.WOYCNXM.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
